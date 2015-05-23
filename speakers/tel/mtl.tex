@@ -480,7 +480,7 @@ RingMult (RingAdd (RingLangIntLit 3)
 \section{"Does is scale?"}
 
 \begin{frame}
-  Yes.
+  Yes. \pause Well, but don't trust me.
 \end{frame}
 
 \section{The "Monad Transformer Library"}
@@ -526,7 +526,17 @@ Prelude> flip runState 0 (inc :: StateT Int Identity Int)
 \end{frame}
 
 \begin{frame}
-  Solve your monad stacks at compile time! \pause Not runtime\pause, nor write-time.
+  Solve your monad stacks at compile time!
+\end{frame}
+
+\begin{frame}[fragile]
+\begin{lstlisting}
+op :: ( MonadState S m, MonadError E m, MonadIO m ) => m A
+op :: ( MonadIO m ) => FreeT (StateErrorF S E) m A
+op :: FreeT (StateErrorF S E) IO A
+op :: StateT S (EitherT E IO) A
+op :: EitherT E (StateT S IO) A
+\end{lstlisting}
 \end{frame}
 
 \section{Complaints}
@@ -534,11 +544,9 @@ Prelude> flip runState 0 (inc :: StateT Int Identity Int)
 \begin{frame}[fragile]
   \frametitle{Just a few points in the lattice}
 \begin{lstlisting}
-MonadTrans (ContT r) Source	 
-Monad (ContT r m) Source	 
-Functor (ContT r m) Source	 
-Applicative (ContT r m) Source	 
-MonadIO m => MonadIO (ContT r m) Source	 
+Monad m => Monad (StateT s m)
+Functor m => Functor (StateT s m)
+MonadTrans (StateT s)
 \end{lstlisting}
 \end{frame}
 
@@ -568,7 +576,29 @@ MonadCont m => MonadCont (ReaderT r m) Source
 
 \begin{frame}
   \frametitle{All points in the lattice}
-  But this is just the name of the game! Effects don't commute.
+  $N$ classes and $M$ concrete types $to$ $NM$ instance definitions
+  \pause
+  $O(n^2)$
+\end{frame}
+
+\begin{frame}
+  \frametitle{So, it doesn't scale}
+  Right?
+  \pause
+  \begin{itemize}
+  \item Well, not for library authors anyway \pause
+  \item This technique is thus packaging resistent---harder to learn about \pause
+  \item But for \textit{users} writing their own classes, $N$ and $M$ remain small
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Teaching your own pet Prolog}
+  \begin{itemize}
+  \item Instances are typeclass Prolog \textit{predicates} \pause
+  \item Effects don't just commute: the theory is hard to generalize today \pause
+  \item \texttt{mtl} lets/forces you to write down all of what you know
+  \end{itemize}
 \end{frame}
 
 \begin{frame}[fragile,fragile]
@@ -614,6 +644,64 @@ class MonadParser m where
 \end{lstlisting}
 \end{frame}
 
+\begin{frame}[fragile]
+  \frametitle{One-step reduction only}
+\begin{lstlisting}
+data Negated
+  = Int Integer
+  | Neg Negated
+
+optimize :: Negated -> Negated
+optimize (Neg (Neg n)) = optimize n
+optimize n = n
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{One-step reduction only}
+\begin{lstlisting}
+class Negated v where
+  int :: Integer -> v
+  neg :: v -> v
+
+instance Negated Integer where
+  int = id
+  neg i = - i
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{One-step reduction only}
+\begin{lstlisting}
+data Neg = Neg { negating :: Bool, value :: Integer }
+
+instance Negated Neg where
+  int i = Neg { negating = False, value = i }
+  neg n = n { negating = not (negating n) }
+
+runNeg :: Neg -> Integer
+runNeg n = if negating n then - (value n) else value n
+\end{lstlisting}
+\end{frame}
+
+\section{Conclusions}
+
+\begin{frame}
+  \begin{itemize}
+    \pause
+  \item When explicit structure's got you down, specifying your needs in Prolog
+    might be worth a shot \pause
+  \item Finally Tagless style can represent whatever AST fragments you like \pause
+  \item \texttt{mtl} is a mature example of using Finally Tagless at scale in a library \pause
+    \begin{itemize}
+    \item As a user, it gives you what you want \pause
+    \item Maintainers bear a big burden \pause
+    \item Good demonstration of why composition is hard \pause
+    \end{itemize}
+  \item Try them out!
+  \end{itemize}
+\end{frame}
+
 \section{Thanks!}
 
 \begin{frame}
@@ -621,6 +709,65 @@ class MonadParser m where
   \begin{center}
     @sdbo
   \end{center}
+\end{frame}
+
+\section{Extra Slides}
+
+\begin{frame}[fragile]
+  \frametitle{GADT replacement}
+\begin{lstlisting}
+data Ast a where
+  K   :: a -> Ast a
+  Lam :: (Ast a -> Ast b) -> Ast (a -> b)
+  App :: Ast (a -> b) -> (Ast a -> Ast b)
+
+interp :: Ast a -> a
+interp x = case x of
+  K a -> a
+  Lam f -> interp . f . K
+  App f a -> (interp f) (interp a)
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{GADT replacement}
+\begin{lstlisting}
+class Ast m where
+  k   :: a -> m a
+  lam :: (m a -> m b) -> m (a -> b)
+  app :: m (a -> b) -> (m a -> m b)
+
+instance Ast Ast where ...
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{GADT replacement}
+\begin{lstlisting}
+newtype Eval a = Eval { eval :: a }
+
+instance Ast Eval where
+  k = Eval
+  lam f = Eval (eval . f . Eval)
+  app (Eval f) = Eval . f . eval
+\end{lstlisting}
+\end{frame}
+
+\begin{frame}[fragile]
+  \frametitle{GADT replacement}
+\begin{lstlisting}
+class Adder m where
+  adder :: m Int -> m Int -> m Int
+
+instance Adder Eval where
+  adder (Eval a) (Eval b) = Eval (a + b)
+
+ex :: (Adder m, Ast m) => m Int
+ex = app (lam (adder (k 3))) (k 4)
+
+-- Prelude> eval ex
+-- 7
+\end{lstlisting}
 \end{frame}
 
 \end{document}
